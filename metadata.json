@@ -1,0 +1,6 @@
+{
+  "name": "3D Model Player & Navigator",
+  "description": "An interactive .glb and .ply 3D world model player and navigator tailored for Meta Quest 3S and Android, supporting customizable viewpoints, lighting, and wireframe options.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

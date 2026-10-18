@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D Model Viewer</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0d0f14;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #ffffff;
+            user-select: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #0b0c10;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(0, 191, 255, 0.1);
+            border-radius: 50%;
+            border-top-color: #00bfff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        #loading-text {
+            margin-top: 20px;
+            font-size: 14px;
+            letter-spacing: 2px;
+            color: #00bfff;
+            text-transform: uppercase;
+        }
+        #progress-bar {
+            width: 200px;
+            height: 4px;
+            background-color: #1f2833;
+            margin-top: 15px;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #00bfff, #00ffcc);
+            transition: width 0.1s ease;
+        }
+        #hud-info {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            z-index: 5;
+            background: rgba(13, 15, 20, 0.8);
+            border: 1px solid rgba(0, 191, 255, 0.2);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-family: monospace;
+            pointer-events: none;
+            backdrop-filter: blur(4px);
+        }
+        .axis-box {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 80px;
+            height: 80px;
+            z-index: 5;
+            pointer-events: none;
+        }
+        /* Grid overlay background to make it look extra space-tech */
+        .hud-grid {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                radial-gradient(circle at center, transparent 0%, rgba(13, 15, 20, 0.4) 100%),
+                linear-gradient(rgba(0, 191, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 191, 255, 0.03) 1px, transparent 1px);
+            background-size: cover, 30px 30px, 30px 30px;
+            z-index: 2;
+            pointer-events: none;
+        }
+    </style>
+    <!-- Include CDN Hosted ThreeJS and Loaders with fallbacks -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/PLYLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+</head>
+<body>
+    <div id="loading-screen">
+        <div class="spinner"></div>
+        <div id="loading-text">Initializing Engine...</div>
+        <div id="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+    </div>
+
+    <div class="hud-grid"></div>
+    <div id="canvas-container"></div>
+    <div id="hud-info">Vertices: 0 | Polygons: 0</div>
+    <div id="axis-container" class="axis-box"></div>
+
+    <script>
+        // Engine parameters
+        let scene, camera, renderer, controls, activeModel;
+        let ambientLight, dirLight, pointLight;
+        let gridHelper, polarGridHelper;
+        
+        // Secondary axis helper
+        let axisScene, axisCamera, axisRenderer, axisHelper;
+
+        // Current model state
+        let currentRenderMode = "solid"; // "solid", "wireframe", "points"
+        let pointCloudSize = 0.05;
+        let isAutoRotating = false;
+        let defaultMaterialColor = 0x00ffcc;
+
+        const container = document.getElementById('canvas-container');
+        const loadingScreen = document.getElementById('loading-screen');
+        const loadingText = document.getElementById('loading-text');
+        const progressFill = document.getElementById('progress-fill');
+        const hudInfo = document.getElementById('hud-info');
+
+        // Check availability of libraries
+        window.addEventListener('load', () => {
+            if (typeof THREE === 'undefined') {
+                loadingText.innerText = "Error: Three.js failed to load. Please check internet connection.";
+                return;
+            }
+            init();
+            animate();
+            loadInitialProceduralScene();
+        });
+
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0d0f14);
+            scene.fog = new THREE.FogExp2(0x0d0f14, 0.015);
+
+            // Camera Setup
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(5, 5, 8);
+
+            // Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            container.appendChild(renderer.domElement);
+
+            // Orbit Controls
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI; // Full navigation
+            controls.minDistance = 0.5;
+            controls.maxDistance = 500;
+            controls.addEventListener('change', () => {
+                sendCameraPositionToAndroid();
+            });
+
+            // Lights
+            ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(10, 20, 15);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.near = 0.5;
+            dirLight.shadow.camera.far = 50;
+            const d = 15;
+            dirLight.shadow.camera.left = -d;
+            dirLight.shadow.camera.right = d;
+            dirLight.shadow.camera.top = d;
+            dirLight.shadow.camera.bottom = -d;
+            scene.add(dirLight);
+
+            pointLight = new THREE.PointLight(0x00bfff, 1.5, 30);
+            pointLight.position.set(0, 5, 0);
+            scene.add(pointLight);
+
+            // Floor Grid Helper
+            gridHelper = new THREE.GridHelper(40, 40, 0x00bfff, 0x1f2833);
+            gridHelper.position.y = -0.01;
+            gridHelper.material.opacity = 0.25;
+            gridHelper.material.transparent = true;
+            scene.add(gridHelper);
+
+            // Custom floor/polar grid
+            polarGridHelper = new THREE.PolarGridHelper(20, 16, 8, 64, 0x00ffcc, 0x1f2833);
+            polarGridHelper.position.y = -0.02;
+            polarGridHelper.material.opacity = 0.15;
+            polarGridHelper.material.transparent = true;
+            scene.add(polarGridHelper);
+
+            // Set up small Axis helper
+            initAxisHelper();
+
+            // Resize listener
+            window.addEventListener('resize', onWindowResize);
+            
+            hideLoading();
+        }
+
+        function initAxisHelper() {
+            const axisContainer = document.getElementById('axis-container');
+            axisScene = new THREE.Scene();
+            
+            axisCamera = new THREE.PerspectiveCamera(50, 1, 1, 100);
+            axisCamera.position.set(0, 0, 4);
+
+            axisRenderer = new THREE.WebGLRenderer({ alpha: true });
+            axisRenderer.setSize(80, 80);
+            axisContainer.appendChild(axisRenderer.domElement);
+
+            axisHelper = new THREE.AxesHelper(1.8);
+            // Color customisation
+            axisHelper.setColors(
+                new THREE.Color(0xff4444), // X - Red
+                new THREE.Color(0x44ff44), // Y - Green
+                new THREE.Color(0x4444ff)  // Z - Blue
+            );
+            axisScene.add(axisHelper);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate(time) {
+            requestAnimationFrame(animate);
+            
+            // Update Tween engine for transitions
+            TWEEN.update();
+
+            // Auto rotate model
+            if (isAutoRotating && activeModel) {
+                activeModel.rotation.y += 0.005;
+            }
+
+            // Update main Orbit controls
+            controls.update();
+
+            // Render main scene
+            renderer.render(scene, camera);
+
+            // Sync axis helper with main camera
+            if (axisCamera && camera && axisRenderer) {
+                axisCamera.position.copy(camera.position);
+                axisCamera.position.sub(controls.target); // Subtract focus point to orbit
+                axisCamera.position.setLength(3.5); // constant distance
+                axisCamera.lookAt(axisScene.position);
+                axisRenderer.render(axisScene, axisCamera);
+            }
+        }
+
+        // Send current camera parameters back to Android Kotlin
+        let lastSentTime = 0;
+        function sendCameraPositionToAndroid() {
+            const now = Date.now();
+            if (now - lastSentTime < 200) return; // Throttle to 5Hz to avoid flooding
+            lastSentTime = now;
+
+            if (window.AndroidInterface) {
+                const pos = camera.position;
+                const tgt = controls.target;
+                window.AndroidInterface.onCameraUpdate(
+                    pos.x, pos.y, pos.z,
+                    tgt.x, tgt.y, tgt.z
+                );
+            }
+        }
+
+        // Show/Hide Loading Overlay
+        function showLoading(text) {
+            loadingScreen.style.opacity = '1';
+            loadingScreen.style.pointerEvents = 'auto';
+            loadingText.innerText = text || "Loading Model...";
+            progressFill.style.width = '0%';
+        }
+
+        function updateProgress(percent) {
+            progressFill.style.width = percent + '%';
+        }
+
+        function hideLoading() {
+            loadingScreen.style.opacity = '0';
+            loadingScreen.style.pointerEvents = 'none';
+        }
+
+        // Clean up previously active models
+        function clearActiveModel() {
+            if (activeModel) {
+                scene.remove(activeModel);
+                // Dispose child geometry/materials
+                activeModel.traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => m.dispose());
+                        } else {
+                            child.material.dispose();
+                        }
+                    }
+                });
+                activeModel = null;
+            }
+        }
+
+        // Animate Camera to specific viewpoint coordinates (Navigating)
+        function animateCameraTo(posX, posY, posZ, targetX, targetY, targetZ) {
+            controls.enabled = false;
+
+            // Animate target focus point
+            new TWEEN.Tween(controls.target)
+                .to({ x: targetX, y: targetY, z: targetZ }, 1200)
+                .easing(TWEEN.Easing.Cubic.Out)
+                .start();
+
+            // Animate camera position
+            new TWEEN.Tween(camera.position)
+                .to({ x: posX, y: posY, z: posZ }, 1200)
+                .easing(TWEEN.Easing.Cubic.Out)
+                .onComplete(() => {
+                    controls.enabled = true;
+                    sendCameraPositionToAndroid();
+                })
+                .start();
+        }
+
+        // Procedural sample scene: used if no model loaded or as standard initial scene
+        function loadInitialProceduralScene() {
+            showLoading("Generating Sci-Fi Hub Space...");
+            
+            setTimeout(() => {
+                clearActiveModel();
+                
+                // Create a beautiful orbital station / sci-fi hub procedurally
+                const group = new THREE.Group();
+                
+                // Central Core
+                const coreGeo = new THREE.OctahedronGeometry(1.5, 2);
+                const coreMat = new THREE.MeshStandardMaterial({
+                    color: 0x00ffcc,
+                    wireframe: false,
+                    roughness: 0.1,
+                    metalness: 0.8,
+                    emissive: 0x003322
+                });
+                const core = new THREE.Mesh(coreGeo, coreMat);
+                group.add(core);
+
+                // Tech Rings
+                const ringGeo1 = new THREE.TorusGeometry(3, 0.1, 16, 100);
+                const ringMat = new THREE.MeshStandardMaterial({ color: 0x00bfff, metalness: 0.9, roughness: 0.1 });
+                const ring1 = new THREE.Mesh(ringGeo1, ringMat);
+                ring1.rotation.x = Math.PI / 2;
+                group.add(ring1);
+
+                const ringGeo2 = new THREE.TorusGeometry(4.2, 0.08, 16, 100);
+                const ring2 = new THREE.Mesh(ringGeo2, ringMat);
+                ring2.rotation.y = Math.PI / 4;
+                group.add(ring2);
+
+                // Outer Solar Panels / Satellites
+                for (let i = 0; i < 4; i++) {
+                    const angle = (i / 4) * Math.PI * 2;
+                    const panelGeo = new THREE.BoxGeometry(1.8, 0.05, 0.8);
+                    const panelMat = new THREE.MeshStandardMaterial({ color: 0x1f2833, roughness: 0.2, metalness: 0.9 });
+                    const panel = new THREE.Mesh(panelGeo, panelMat);
+                    panel.position.set(Math.cos(angle) * 5.5, 0, Math.sin(angle) * 5.5);
+                    panel.rotation.y = -angle;
+                    group.add(panel);
+
+                    // Tiny connector
+                    const connectorGeo = new THREE.CylinderGeometry(0.04, 0.04, 1.5);
+                    const connector = new THREE.Mesh(connectorGeo, ringMat);
+                    connector.rotation.z = Math.PI / 2;
+                    connector.position.set(Math.cos(angle) * 4.6, 0, Math.sin(angle) * 4.6);
+                    connector.rotation.y = -angle;
+                    group.add(connector);
+                }
+
+                // Floor Scan Base Grid
+                const scanBaseGeo = new THREE.CylinderGeometry(8, 8, 0.1, 32);
+                const scanBaseMat = new THREE.MeshStandardMaterial({
+                    color: 0x0d1117,
+                    roughness: 0.5,
+                    metalness: 0.8,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                const scanBase = new THREE.Mesh(scanBaseGeo, scanBaseMat);
+                scanBase.position.y = -1.5;
+                group.add(scanBase);
+
+                scene.add(group);
+                activeModel = group;
+
+                // Position camera to fit
+                camera.position.set(7, 4, 10);
+                controls.target.set(0, 0, 0);
+                controls.update();
+
+                calculateStats(group);
+                hideLoading();
+                if (window.AndroidInterface) {
+                    window.AndroidInterface.onLoadSuccess("Space Station Core Hub");
+                }
+            }, 500);
+        }
+
+        // Procedural point cloud generator for PLY example (Scan of a cave/room)
+        function loadProceduralPlyScan() {
+            showLoading("Synthesizing 3D Laser Scan...");
+
+            setTimeout(() => {
+                clearActiveModel();
+
+                const group = new THREE.Group();
+                const particleCount = 12000;
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(particleCount * 3);
+                const colors = new Float32Array(particleCount * 3);
+
+                const colorPalette = [
+                    new THREE.Color(0x00bfff), // Cyans
+                    new THREE.Color(0x00ffcc), // Greens
+                    new THREE.Color(0xff00ff), // Magentas
+                    new THREE.Color(0x7000ff)  // Purples
+                ];
+
+                // Build a wavy corridor scan
+                for (let i = 0; i < particleCount; i++) {
+                    const z = (i / particleCount) * 30 - 15; // length
+                    const angle = Math.random() * Math.PI * 2;
+                    
+                    // Wave pattern
+                    const radius = 2.5 + Math.sin(z * 0.5) * 0.5 + Math.random() * 0.4;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius + 1;
+
+                    positions[i * 3] = x;
+                    positions[i * 3 + 1] = y;
+                    positions[i * 3 + 2] = z;
+
+                    // Color mapped to depth / z
+                    const paletteIndex = Math.floor(Math.abs(z + 15) / 30 * colorPalette.length) % colorPalette.length;
+                    const baseColor = colorPalette[paletteIndex];
+                    const randomColorOffset = (Math.random() - 0.5) * 0.1;
+                    
+                    colors[i * 3] = Math.max(0, Math.min(1, baseColor.r + randomColorOffset));
+                    colors[i * 3 + 1] = Math.max(0, Math.min(1, baseColor.g + randomColorOffset));
+                    colors[i * 3 + 2] = Math.max(0, Math.min(1, baseColor.b + randomColorOffset));
+                }
+
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+                const material = new THREE.PointsMaterial({
+                    size: pointCloudSize,
+                    vertexColors: true,
+                    transparent: true,
+                    opacity: 0.85,
+                    sizeAttenuation: true
+                });
+
+                const points = new THREE.Points(geometry, material);
+                group.add(points);
+                scene.add(group);
+                activeModel = group;
+
+                camera.position.set(0, 3, 15);
+                controls.target.set(0, 1, 0);
+                controls.update();
+
+                calculateStats(group);
+                hideLoading();
+                if (window.AndroidInterface) {
+                    window.AndroidInterface.onLoadSuccess("LIDAR Corridor Scan");
+                }
+            }, 600);
+        }
+
+        // Convert base64 string to ArrayBuffer safely
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        // Primary loading mechanism called from Android Kotlin
+        function loadModelFromBase64(base64Data, extension, name) {
+            showLoading("Parsing data stream...");
+            updateProgress(20);
+
+            setTimeout(() => {
+                try {
+                    const arrayBuffer = base64ToArrayBuffer(base64Data);
+                    updateProgress(50);
+
+                    clearActiveModel();
+
+                    if (extension === 'glb' || extension === 'gltf') {
+                        const loader = new THREE.GLTFLoader();
+                        loader.parse(arrayBuffer, '', (gltf) => {
+                            activeModel = gltf.scene;
+                            
+                            // Adjust size & center model automatically
+                            const box = new THREE.Box3().setFromObject(activeModel);
+                            const size = box.getSize(new THREE.Vector3());
+                            const center = box.getCenter(new THREE.Vector3());
+                            
+                            // Move model so center is at (0, 0, 0) but keeping offset
+                            activeModel.position.x += (activeModel.position.x - center.x);
+                            activeModel.position.y += (activeModel.position.y - center.y);
+                            activeModel.position.z += (activeModel.position.z - center.z);
+                            
+                            // Scale to a standard viewport size (approx 5 units max dimensions)
+                            const maxDim = Math.max(size.x, size.y, size.z);
+                            if (maxDim > 0) {
+                                const scale = 5.0 / maxDim;
+                                activeModel.scale.set(scale, scale, scale);
+                            }
+
+                            // Ensure shadow maps are computed
+                            activeModel.traverse(child => {
+                                if (child.isMesh) {
+                                    child.castShadow = true;
+                                    child.receiveShadow = true;
+                                    
+                                    // Make sure material colors are responsive
+                                    if (child.material) {
+                                        child.material.roughness = 0.4;
+                                        child.material.metalness = 0.5;
+                                        if (currentRenderMode === "wireframe") {
+                                            child.material.wireframe = true;
+                                        }
+                                    }
+                                }
+                            });
+
+                            scene.add(activeModel);
+
+                            // Set camera dynamically to capture the entire object nicely
+                            camera.position.set(6, 4, 8);
+                            controls.target.set(0, 0, 0);
+                            controls.update();
+
+                            calculateStats(activeModel);
+                            hideLoading();
+                            
+                            // Notify Android that load succeeded
+                            if (window.AndroidInterface) {
+                                window.AndroidInterface.onLoadSuccess(name || "Model");
+                            }
+
+                        }, (error) => {
+                            throw error;
+                        });
+
+                    } else if (extension === 'ply') {
+                        const loader = new THREE.PLYLoader();
+                        const geometry = loader.parse(arrayBuffer);
+                        
+                        // Compute vertex colors if missing
+                        if (!geometry.attributes.color) {
+                            const colors = [];
+                            const positionAttr = geometry.attributes.position;
+                            for (let i = 0; i < positionAttr.count; i++) {
+                                // Default gradients based on coordinates
+                                colors.push(0.0, 0.7, 1.0);
+                            }
+                            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+                        }
+
+                        // Determine if it should render as solid mesh or points
+                        let plyObject;
+                        if (geometry.index !== null || currentRenderMode !== "points") {
+                            // Render as solid mesh
+                            geometry.computeVertexNormals();
+                            const material = new THREE.MeshStandardMaterial({
+                                vertexColors: true,
+                                roughness: 0.3,
+                                metalness: 0.6,
+                                wireframe: currentRenderMode === "wireframe",
+                                side: THREE.DoubleSide
+                            });
+                            plyObject = new THREE.Mesh(geometry, material);
+                        } else {
+                            // PLY is point cloud
+                            const material = new THREE.PointsMaterial({
+                                size: pointCloudSize,
+                                vertexColors: true,
+                                transparent: true,
+                                opacity: 0.9,
+                                sizeAttenuation: true
+                            });
+                            plyObject = new THREE.Points(geometry, material);
+                        }
+
+                        activeModel = new THREE.Group();
+                        activeModel.add(plyObject);
+
+                        // Auto-center & Scale
+                        const box = new THREE.Box3().setFromObject(activeModel);
+                        const size = box.getSize(new THREE.Vector3());
+                        const center = box.getCenter(new THREE.Vector3());
+                        
+                        activeModel.position.x += (activeModel.position.x - center.x);
+                        activeModel.position.y += (activeModel.position.y - center.y);
+                        activeModel.position.z += (activeModel.position.z - center.z);
+                        
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        if (maxDim > 0) {
+                            const scale = 5.0 / maxDim;
+                            activeModel.scale.set(scale, scale, scale);
+                        }
+
+                        scene.add(activeModel);
+
+                        camera.position.set(6, 4, 8);
+                        controls.target.set(0, 0, 0);
+                        controls.update();
+
+                        calculateStats(activeModel);
+                        hideLoading();
+
+                        // Notify Android
+                        if (window.AndroidInterface) {
+                            window.AndroidInterface.onLoadSuccess(name || "PLY Model");
+                        }
+                    }
+
+                } catch (e) {
+                    console.error(e);
+                    loadingText.innerText = "Error parsing model stream: " + e.message;
+                    if (window.AndroidInterface) {
+                        window.AndroidInterface.onLoadError(e.message);
+                    }
+                }
+            }, 300);
+        }
+
+        // Calculate and display polygons & vertices details
+        function calculateStats(object) {
+            let vertices = 0;
+            let polygons = 0;
+
+            object.traverse(child => {
+                if (child.isMesh) {
+                    const geom = child.geometry;
+                    if (geom.index) {
+                        polygons += geom.index.count / 3;
+                    } else if (geom.attributes.position) {
+                        polygons += geom.attributes.position.count / 3;
+                    }
+                    if (geom.attributes.position) {
+                        vertices += geom.attributes.position.count;
+                    }
+                } else if (child.isPoints) {
+                    if (child.geometry.attributes.position) {
+                        vertices += child.geometry.attributes.position.count;
+                    }
+                }
+            });
+
+            hudInfo.innerText = `Vertices: ${vertices.toLocaleString()} | Polygons: ${polygons.toLocaleString()}`;
+            
+            // Send back to Android
+            if (window.AndroidInterface) {
+                window.AndroidInterface.onStatsUpdate(vertices, polygons);
+            }
+        }
+
+        // Set View mode: solid, wireframe, or points
+        function setRenderMode(mode) {
+            currentRenderMode = mode;
+            if (!activeModel) return;
+
+            activeModel.traverse(child => {
+                if (child.isMesh) {
+                    if (mode === "wireframe") {
+                        child.material.wireframe = true;
+                        // Swap back if hidden mesh
+                    } else if (mode === "solid") {
+                        child.material.wireframe = false;
+                    }
+                } else if (child.isPoints && mode !== "points") {
+                    // Convert points to mesh geometry if indices are present
+                }
+            });
+            
+            // Re-render model if needed to change mesh/point rendering
+            if (activeModel && (mode === "points" || mode === "solid")) {
+                // If the active model is a PLY file loaded as mesh and we toggle to points
+            }
+        }
+
+        // Set point size slider for PLY Point Clouds
+        function setPointSize(size) {
+            pointCloudSize = parseFloat(size);
+            if (!activeModel) return;
+
+            activeModel.traverse(child => {
+                if (child.isPoints && child.material) {
+                    child.material.size = pointCloudSize;
+                    child.material.needsUpdate = true;
+                }
+            });
+        }
+
+        // Set background color from Android color picker
+        function setBackgroundColor(hexColorString) {
+            scene.background = new THREE.Color(hexColorString);
+            scene.fog.color = new THREE.Color(hexColorString);
+        }
+
+        // Toggle Grid Helper
+        function toggleGrid(show) {
+            gridHelper.visible = show;
+            polarGridHelper.visible = show;
+        }
+
+        // Set Light Intensity Slider
+        function setLightIntensity(intensity) {
+            const val = parseFloat(intensity);
+            ambientLight.intensity = val * 0.5;
+            dirLight.intensity = val * 1.0;
+        }
+
+        // Set Auto Rotation
+        function setAutoRotate(rotate) {
+            isAutoRotating = rotate;
+        }
+
+        // Trigger Procedural loaders from Android Kotlin Buttons
+        function loadProceduralCore(type) {
+            if (type === 'station') {
+                loadInitialProceduralScene();
+            } else if (type === 'scan') {
+                loadProceduralPlyScan();
+            }
+        }
+    </script>
+</body>
+</html>

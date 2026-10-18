@@ -1,0 +1,66 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Outer 3D bounding/scanning circle -->
+    <path
+        android:pathData="M54,54m-38,0a38,38 0,1 1,76 0a38,38 0,1 1,-76 0"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00BFFF"
+        android:strokeAlpha="0.4"
+        android:fillColor="#00000000" />
+        
+    <!-- Main 3D Navigational Isometric Cube -->
+    <!-- Front Left Face -->
+    <path
+        android:pathData="M54,32 L28,45 L28,71 L54,84 Z"
+        android:fillColor="#001830"
+        android:fillAlpha="0.6"
+        android:strokeWidth="2"
+        android:strokeColor="#00BFFF" />
+        
+    <!-- Front Right Face -->
+    <path
+        android:pathData="M54,32 L80,45 L80,71 L54,84 Z"
+        android:fillColor="#002220"
+        android:fillAlpha="0.6"
+        android:strokeWidth="2"
+        android:strokeColor="#00FFCC" />
+        
+    <!-- Top Face -->
+    <path
+        android:pathData="M54,32 L80,45 L54,58 L28,45 Z"
+        android:fillColor="#07131B"
+        android:fillAlpha="0.8"
+        android:strokeWidth="2"
+        android:strokeColor="#00BFFF" />
+        
+    <!-- Coordinate Axis Indicators (X, Y, Z lines from center) -->
+    <!-- Vertically up (Y) -->
+    <path
+        android:pathData="M54,58 L54,84"
+        android:strokeWidth="2"
+        android:strokeColor="#FF00FF"
+        android:strokeLineCap="round" />
+        
+    <!-- Angle Left (X) -->
+    <path
+        android:pathData="M54,58 L28,45"
+        android:strokeWidth="2"
+        android:strokeColor="#00BFFF"
+        android:strokeLineCap="round" />
+        
+    <!-- Angle Right (Z) -->
+    <path
+        android:pathData="M54,58 L80,45"
+        android:strokeWidth="2"
+        android:strokeColor="#00FFCC"
+        android:strokeLineCap="round" />
+
+    <!-- Center Navigation Core Core Node -->
+    <path
+        android:pathData="M54,58m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0"
+        android:fillColor="#FFFFFF" />
+</vector>
